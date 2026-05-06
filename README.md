@@ -18,6 +18,45 @@ Wiring details for all connectors and FPGA pins are documented in [`src/PINOUT.m
 
 ---
 
+## Emulator
+
+Before implementing the CPU in hardware, a software emulator of the RV32I ISA was written in C. The emulator was used to understand and validate the architecture without dealing with FPGA-specific constraints, and its execution traces were used to verify the hardware implementation.
+
+The emulator lives in [`emulator/`](emulator/).
+
+| File | Description |
+|---|---|
+| `emulator.c` | Full RV32I emulator — fetch/decode/execute loop, 32 registers, 16 KB instruction memory, 16 KB data memory |
+| `test_immediates.c` | Unit tests for all five immediate encodings (I, S, B, U, J-type) |
+| `unit_test.c` | Additional CPU unit tests |
+
+### Building and running
+
+Requires a C compiler (GCC or Clang).
+
+```sh
+cd emulator
+make            # build the emulator
+./emulator      # run interactively — prompts for number of steps to execute
+```
+
+The emulator runs in a step-through mode: after each batch of instructions it prints the full register file (all 32 registers with ABI names and values) so you can inspect state at any point.
+
+```sh
+make test-immediates   # compile and run the immediate decoding unit tests
+```
+
+### Architecture
+
+The emulator models the same memory map as the hardware:
+
+- Instruction memory: 16 KB array at offset `0x0000`
+- Data memory: 16 KB array at offset `0x10000`
+
+A program is loaded by placing machine code into the `program[]` array in `emulator.c`. The interactive loop then lets you step through any number of instructions and inspect registers after each step.
+
+---
+
 ## CPU Architecture
 
 The CPU implements the **RV32I** base integer instruction set (no M/F/D/C extensions). It is a **multi-cycle design**: each instruction takes multiple clock cycles to complete, with the datapath advancing through the following stages on each clock edge:
