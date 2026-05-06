@@ -117,10 +117,25 @@ Polls the PS2 DualShock controller in a loop using the standard PS2 digital-mode
 
 ### Prerequisites
 
-- `riscv64-unknown-elf-gcc` (or any RV32I-capable RISC-V toolchain)
-- GNU `objcopy`, `objdump`, `hexdump`
+You need a RISC-V bare-metal GCC toolchain. The build scripts use `riscv64-unknown-elf-gcc` (the 64-bit toolchain works fine when targeting RV32I via `-march=rv32i`).
 
-### Process
+**macOS (Homebrew):**
+```sh
+brew install riscv-gnu-toolchain
+```
+
+**Ubuntu / Debian:**
+```sh
+sudo apt install gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf
+```
+
+**From source:** https://github.com/riscv-collab/riscv-gnu-toolchain
+
+You also need standard GNU tools: `objcopy`, `objdump`, `hexdump` (all included with the toolchain).
+
+---
+
+### Using the build scripts (recommended)
 
 Each app lives in `src/apps/<name>/` and contains:
 
@@ -140,11 +155,62 @@ cd src/apps/snake
 
 This produces `main.elf`, `main.bin`, `main.disasm`, and `rom.mi`. The script automatically copies `rom.mi` to `src/rom.mi`, ready for synthesis.
 
-The compiler flags used are:
+---
 
+### Manual compilation
+
+If you want to compile a C program without using the build scripts, here is the full pipeline:
+
+**1. Compile and link:**
+```sh
+riscv64-unknown-elf-gcc \
+  -march=rv32i -mabi=ilp32 \
+  -ffreestanding -nostdlib -static \
+  -fno-pic -fno-pie \
+  -fdata-sections -ffunction-sections \
+  -O2 -Wall -Wextra \
+  -Wl,-T,link.ld -Wl,--gc-sections \
+  boot.s main.c \
+  -o main.elf
 ```
--march=rv32i -mabi=ilp32 -ffreestanding -nostdlib -O2
+
+**2. Strip to a raw binary:**
+```sh
+riscv64-unknown-elf-objcopy -O binary main.elf main.bin
 ```
+
+**3. Convert to hex (one 32-bit word per line, big-endian):**
+```sh
+hexdump -v -e '1/4 "%08x\n"' main.bin > rom.mi
+```
+
+**4. Copy into `src/` for synthesis:**
+```sh
+cp rom.mi ../../rom.mi   # from inside the app directory
+```
+
+**Optional — inspect the disassembly:**
+```sh
+riscv64-unknown-elf-objdump --disassemble-all main.elf > main.disasm
+```
+
+#### Flag reference
+
+| Flag | Reason |
+|---|---|
+| `-march=rv32i` | Target the RV32I base ISA (no extensions) |
+| `-mabi=ilp32` | 32-bit integer ABI, no floating point |
+| `-ffreestanding` | No hosted C library assumed |
+| `-nostdlib` | Do not link against libc or crt0 |
+| `-static` | Fully static binary (no dynamic linker) |
+| `-fno-pic -fno-pie` | No position-independent code |
+| `-fdata-sections -ffunction-sections` | Allow linker to discard unused sections |
+| `-Wl,--gc-sections` | Actually discard those unused sections |
+| `-Wl,-T,link.ld` | Use the custom linker script |
+
+#### Writing a new app from scratch
+
+Copy an existing app directory as a starting point — you need `boot.s` and `link.ld` as-is. Your entry point is `main()`. There is no standard library; use direct memory-mapped writes for all I/O.
 
 ---
 
