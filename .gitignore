@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Gowin IDE user settings (machine-specific)
+*.gprj.user
+
+# Gowin EDA implementation outputs (synthesis, place & route, bitstream)
+impl/
+
+# Root-level rom.mi (duplicate of src/rom.mi)
+/rom.mi
+
+# Simulation outputs
+src/tb.vcd
+src/tb.vvp
+
+# Gowin router area output
+*.rao
+
+# App build artifacts (compiled from C / assembly sources)
+src/apps/**/*.bin
+src/apps/**/*.elf
+src/apps/**/*.disasm
+src/apps/**/*.o
+src/apps/**/*.mi
