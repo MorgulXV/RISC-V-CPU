@@ -1,8 +1,25 @@
 # RISC-V CPU
 
-A custom 32-bit RISC-V CPU (RV32I) implemented from scratch in SystemVerilog, synthesized on a Gowin GW5A-25A FPGA. The CPU runs bare-metal C and assembly programs on real hardware, driving a 64×64 RGB LED matrix display and reading input from a PS2 DualShock gamepad.
+A custom 32-bit RISC-V CPU (RV32I) built from scratch in SystemVerilog and synthesized on a Gowin GW5A-25A FPGA. It runs bare-metal C and assembly programs on real hardware, drives a 64×64 RGB LED matrix, and reads input from a PS2 DualShock gamepad over SPI.
 
-This project was built as a *Jahresarbeit* (annual project / thesis). The full written documentation is in [`thesis/`](thesis/) — see [`thesis/text.pdf`](thesis/text.pdf) for the compiled PDF (in German).
+Built as a *Jahresarbeit* (annual thesis project) at Rudolf-Steiner-Schule Schloss Hamborn.  
+Full written documentation (German): [`thesis/text.pdf`](thesis/text.pdf)
+
+![Hardware photo](thesis/IMG_3295.png)
+
+---
+
+## Contents
+
+- [Hardware](#hardware)
+- [Emulator](#emulator)
+- [CPU Architecture](#cpu-architecture)
+- [Memory Map](#memory-map)
+- [Peripherals](#peripherals)
+- [Building an App](#building-an-app)
+- [Example Apps](#example-apps)
+- [Simulation](#simulation)
+- [Synthesis](#synthesis)
 
 ---
 
@@ -14,87 +31,71 @@ This project was built as a *Jahresarbeit* (annual project / thesis). The full w
 | Display | 64×64 HUB75E RGB LED matrix |
 | Controller | PS2 DualShock gamepad (SPI) |
 
-Wiring details for all connectors and FPGA pins are documented in [`src/PINOUT.md`](src/PINOUT.md).
+Pin assignments and connector wiring: [`src/PINOUT.md`](src/PINOUT.md)
 
 ---
 
 ## Emulator
 
-Before implementing the CPU in hardware, a software emulator of the RV32I ISA was written in C. The emulator was used to understand and validate the architecture without dealing with FPGA-specific constraints, and its execution traces were used to verify the hardware implementation.
+Before writing any hardware, a software emulator of the RV32I ISA was written in C. It served as a way to understand and validate the architecture without FPGA toolchain overhead, and its execution traces were used to verify the hardware implementation later.
 
-The emulator lives in [`emulator/`](emulator/).
+Source: [`emulator/`](emulator/)
 
 | File | Description |
 |---|---|
-| `emulator.c` | Full RV32I emulator — fetch/decode/execute loop, 32 registers, 16 KB instruction memory, 16 KB data memory |
+| `emulator.c` | Full RV32I emulator — fetch/decode/execute loop, 32 registers, 16 KB instruction and data memory |
 | `test_immediates.c` | Unit tests for all five immediate encodings (I, S, B, U, J-type) |
 | `unit_test.c` | Additional CPU unit tests |
 
-### Building and running
-
-Requires a C compiler (GCC or Clang).
+**Build and run** (requires GCC or Clang):
 
 ```sh
 cd emulator
-make            # build the emulator
-./emulator      # run interactively — prompts for number of steps to execute
+make              # build
+./emulator        # interactive step-through mode
+make test-immediates  # run immediate decoding unit tests
 ```
 
-The emulator runs in a step-through mode: after each batch of instructions it prints the full register file (all 32 registers with ABI names and values) so you can inspect state at any point.
-
-```sh
-make test-immediates   # compile and run the immediate decoding unit tests
-```
-
-### Architecture
-
-The emulator models the same memory map as the hardware:
-
-- Instruction memory: 16 KB array at offset `0x0000`
-- Data memory: 16 KB array at offset `0x10000`
-
-A program is loaded by placing machine code into the `program[]` array in `emulator.c`. The interactive loop then lets you step through any number of instructions and inspect registers after each step.
+The emulator runs step-by-step: after each batch of instructions it prints all 32 registers with their ABI names and current values.
 
 ---
 
 ## CPU Architecture
 
-The CPU implements the **RV32I** base integer instruction set (no M/F/D/C extensions). It is a **multi-cycle design**: each instruction takes multiple clock cycles to complete, with the datapath advancing through the following stages on each clock edge:
+The CPU implements the **RV32I** base integer ISA. It is a **multi-cycle design** — each instruction takes multiple clock cycles, advancing through these stages:
 
 ```
 FETCH → DECODE → EXECUTE → MEMORY1 → MEMORY2 → WRITEBACK
 ```
 
-| Stage | What happens |
+| Stage | Description |
 |---|---|
-| **FETCH** | Sends PC to instruction ROM, latches next PC = PC + 4 |
-| **DECODE** | Breaks the instruction word into opcode, rd, rs1, rs2, funct3/7 and sign-extends the immediate |
-| **EXECUTE** | ALU operation, branch condition evaluation, address calculation for loads/stores |
-| **MEMORY1** | Initiates memory read or write, routes store data to the correct byte lanes |
-| **MEMORY2** | Captures read data from RAM or SPI peripheral; sign/zero-extends for LB/LH/LBU/LHU |
-| **WRITEBACK** | Writes result to the register file, advances PC |
+| **FETCH** | Sends PC to instruction ROM, latches PC + 4 as next PC |
+| **DECODE** | Extracts opcode, rd, rs1, rs2, funct3/7, sign-extends immediate |
+| **EXECUTE** | ALU operation, branch condition, load/store address calculation |
+| **MEMORY1** | Initiates memory read or write, routes store data to correct byte lanes |
+| **MEMORY2** | Captures read data; sign/zero-extends for LB, LH, LBU, LHU |
+| **WRITEBACK** | Writes result to register file, advances PC |
 
-### Register file
+**Register file:** 32 × 32-bit registers (x0–x31). x0 is hardwired to zero.
 
-32 general-purpose registers (x0–x31). x0 is hardwired to zero (writes are ignored).
+**Supported instructions:**
 
-### Supported instructions
-
-All RV32I instructions are implemented:
-
-- **R-type**: ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU
-- **I-type arithmetic**: ADDI, ANDI, ORI, XORI, SLLI, SRLI, SRAI, SLTI, SLTIU
-- **Loads**: LW, LH, LB, LHU, LBU
-- **Stores**: SW, SH, SB
-- **Branches**: BEQ, BNE, BLT, BGE, BLTU, BGEU
-- **Jumps**: JAL, JALR
-- **Upper immediate**: LUI, AUIPC
+| Type | Instructions |
+|---|---|
+| R-type | ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU |
+| I-type arithmetic | ADDI, ANDI, ORI, XORI, SLLI, SRLI, SRAI, SLTI, SLTIU |
+| Loads | LW, LH, LB, LHU, LBU |
+| Stores | SW, SH, SB |
+| Branches | BEQ, BNE, BLT, BGE, BLTU, BGEU |
+| Jumps | JAL, JALR |
+| Upper immediate | LUI, AUIPC |
 
 ---
 
 ## Memory Map
 
-The CPU uses a flat 32-bit address space. Peripherals are memory-mapped: reads and writes to their address ranges are routed to the appropriate hardware block instead of RAM.
+Peripherals are memory-mapped — reads and writes to their address ranges are routed to the appropriate hardware block.
 
 | Address range | Size | Device |
 |---|---|---|
@@ -103,40 +104,13 @@ The CPU uses a flat 32-bit address space. Peripherals are memory-mapped: reads a
 | `0x0002_0000 – 0x0002_FFFF` | 16 KB | Framebuffer |
 | `0x0003_0000 – 0x0003_FFFF` | — | SPI / gamepad controller |
 
-**Instruction ROM** is read-only block RAM initialised from `src/rom.mi`. A program is loaded by replacing this file before synthesis.
+**Instruction ROM** is read-only block RAM initialised from `src/rom.mi`. Loading a program means replacing this file before synthesis.
 
-**Data RAM** supports byte-enable writes (SB, SH, SW all work correctly).
+**Data RAM** supports byte-enable writes — SB, SH, and SW all work correctly.
 
-**Framebuffer** is a 64×64 array of 32-bit words. Each word represents one pixel. Only the lowest 3 bits are used: `[2]=R [1]=G [0]=B`, giving 8 colours. The LED controller reads the framebuffer continuously and drives the HUB75E panel.
+**Framebuffer** is a 64×64 array of 32-bit words, one per pixel. Only the lowest 3 bits are used: `[2]=R [1]=G [0]=B`, giving 8 colours total.
 
-**SPI / gamepad** — a single read from `0x0003_0000` returns the current 16-bit button state of the connected PS2 DualShock controller. Buttons are active-high (already inverted from the raw SPI data).
-
-```c
-volatile unsigned int *spi = (volatile unsigned int *) 0x00030000;
-int buttons = spi[0];
-
-if (buttons & 0x8000) { /* left  pressed */ }
-if (buttons & 0x4000) { /* down  pressed */ }
-if (buttons & 0x2000) { /* right pressed */ }
-if (buttons & 0x1000) { /* up    pressed */ }
-```
-
----
-
-## Writing to the Display
-
-Write a pixel by indexing into the framebuffer:
-
-```c
-volatile unsigned int *fb = (volatile unsigned int *) 0x00020000;
-
-// fb[row * 64 + col] = colour
-fb[10 * 64 + 20] = 0x4;  // red pixel at (row=10, col=20)
-fb[10 * 64 + 21] = 0x2;  // green
-fb[10 * 64 + 22] = 0x1;  // blue
-fb[10 * 64 + 23] = 0x7;  // white
-fb[10 * 64 + 24] = 0x0;  // off
-```
+**SPI / gamepad** — reading `0x0003_0000` returns the current 16-bit button state of the DualShock controller (active-high, already inverted from raw SPI).
 
 ---
 
@@ -144,21 +118,43 @@ fb[10 * 64 + 24] = 0x0;  // off
 
 ### LED Controller
 
-Continuously scans the 64×64 framebuffer and outputs HUB75E signals (`ROW_ADDR`, `COL_ADDR`, `CLK`, `LATCH`, `OE`, `DATA_A/B`). The scan runs independently of the CPU — writing to the framebuffer takes effect on the next scan pass.
+Continuously scans the framebuffer and outputs HUB75E signals (`ROW_ADDR`, `COL_ADDR`, `CLK`, `LATCH`, `OE`, `DATA_A/B`). The scan runs independently of the CPU — pixel writes take effect on the next scan pass.
+
+Writing to the display from C:
+
+```c
+volatile unsigned int *fb = (volatile unsigned int *) 0x00020000;
+
+fb[row * 64 + col] = 0x4;  // red
+fb[row * 64 + col] = 0x2;  // green
+fb[row * 64 + col] = 0x1;  // blue
+fb[row * 64 + col] = 0x7;  // white
+fb[row * 64 + col] = 0x0;  // off
+```
 
 ### SPI Controller
 
-Polls the PS2 DualShock controller in a loop using the standard PS2 digital-mode protocol (6-byte SPI transaction). After each complete transaction the 16-bit button word is latched into a register readable by the CPU at `0x0003_0000`.
+Polls the PS2 DualShock using the standard 6-byte SPI transaction in a loop. After each transaction the 16-bit button state is latched into a register the CPU can read.
+
+```c
+volatile unsigned int *spi = (volatile unsigned int *) 0x00030000;
+int buttons = spi[0];
+
+if (buttons & 0x8000) { /* left  */ }
+if (buttons & 0x4000) { /* down  */ }
+if (buttons & 0x2000) { /* right */ }
+if (buttons & 0x1000) { /* up    */ }
+```
 
 ---
 
 ## Building an App
 
-### Prerequisites
+### Toolchain
 
-You need a RISC-V bare-metal GCC toolchain. The build scripts use `riscv64-unknown-elf-gcc` (the 64-bit toolchain works fine when targeting RV32I via `-march=rv32i`).
+The build scripts use `riscv64-unknown-elf-gcc`. The 64-bit toolchain targets RV32I correctly via `-march=rv32i`.
 
-**macOS (Homebrew):**
+**macOS:**
 ```sh
 brew install riscv-gnu-toolchain
 ```
@@ -170,38 +166,30 @@ sudo apt install gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf
 
 **From source:** https://github.com/riscv-collab/riscv-gnu-toolchain
 
-You also need standard GNU tools: `objcopy`, `objdump`, `hexdump` (all included with the toolchain).
+### Using the build scripts
 
----
-
-### Using the build scripts (recommended)
-
-Each app lives in `src/apps/<name>/` and contains:
-
-| File | Purpose |
-|---|---|
-| `main.c` / `*.s` | Application source |
-| `boot.s` | Startup stub (copies `.data`, zeros `.bss`, calls `main`) |
-| `link.ld` / `link.x` | Linker script (places `.text` at ROM, `.data`/`.bss` at RAM) |
-| `build.sh` | Build script |
-
-Run the build script from the app directory:
+Each app in `src/apps/<name>/` has a `build.sh`:
 
 ```sh
 cd src/apps/snake
 ./build.sh
 ```
 
-This produces `main.elf`, `main.bin`, `main.disasm`, and `rom.mi`. The script automatically copies `rom.mi` to `src/rom.mi`, ready for synthesis.
+This compiles, strips to a raw binary, converts to `.mi` hex format, and copies the result to `src/rom.mi` ready for synthesis.
 
----
+Each app directory contains:
+
+| File | Purpose |
+|---|---|
+| `main.c` / `*.s` | Application source |
+| `boot.s` | Startup stub — copies `.data`, zeroes `.bss`, calls `main()` |
+| `link.ld` / `link.x` | Linker script — `.text` at ROM, `.data`/`.bss` at RAM |
+| `build.sh` | Build script |
 
 ### Manual compilation
 
-If you want to compile a C program without using the build scripts, here is the full pipeline:
-
-**1. Compile and link:**
 ```sh
+# 1. Compile and link
 riscv64-unknown-elf-gcc \
   -march=rv32i -mabi=ilp32 \
   -ffreestanding -nostdlib -static \
@@ -209,47 +197,32 @@ riscv64-unknown-elf-gcc \
   -fdata-sections -ffunction-sections \
   -O2 -Wall -Wextra \
   -Wl,-T,link.ld -Wl,--gc-sections \
-  boot.s main.c \
-  -o main.elf
-```
+  boot.s main.c -o main.elf
 
-**2. Strip to a raw binary:**
-```sh
+# 2. Strip to raw binary
 riscv64-unknown-elf-objcopy -O binary main.elf main.bin
-```
 
-**3. Convert to hex (one 32-bit word per line, big-endian):**
-```sh
+# 3. Convert to hex (one 32-bit word per line)
 hexdump -v -e '1/4 "%08x\n"' main.bin > rom.mi
-```
 
-**4. Copy into `src/` for synthesis:**
-```sh
-cp rom.mi ../../rom.mi   # from inside the app directory
-```
+# 4. Copy to src/ for synthesis
+cp rom.mi ../../rom.mi
 
-**Optional — inspect the disassembly:**
-```sh
+# Optional: inspect disassembly
 riscv64-unknown-elf-objdump --disassemble-all main.elf > main.disasm
 ```
 
-#### Flag reference
+**Key compiler flags:**
 
-| Flag | Reason |
+| Flag | Purpose |
 |---|---|
-| `-march=rv32i` | Target the RV32I base ISA (no extensions) |
+| `-march=rv32i` | Target RV32I base ISA |
 | `-mabi=ilp32` | 32-bit integer ABI, no floating point |
-| `-ffreestanding` | No hosted C library assumed |
-| `-nostdlib` | Do not link against libc or crt0 |
-| `-static` | Fully static binary (no dynamic linker) |
+| `-ffreestanding -nostdlib` | No hosted C library or crt0 |
 | `-fno-pic -fno-pie` | No position-independent code |
-| `-fdata-sections -ffunction-sections` | Allow linker to discard unused sections |
-| `-Wl,--gc-sections` | Actually discard those unused sections |
-| `-Wl,-T,link.ld` | Use the custom linker script |
+| `-fdata-sections -ffunction-sections -Wl,--gc-sections` | Strip unused code and data |
 
-#### Writing a new app from scratch
-
-Copy an existing app directory as a starting point — you need `boot.s` and `link.ld` as-is. Your entry point is `main()`. There is no standard library; use direct memory-mapped writes for all I/O.
+To write a new app from scratch, copy an existing app directory. You need `boot.s` and `link.ld` as-is. Your entry point is `main()`. There is no standard library — use direct memory-mapped writes for all I/O.
 
 ---
 
@@ -266,8 +239,8 @@ Copy an existing app directory as a starting point — you need `boot.s` and `li
 | `led-red-asm` | Assembly | Lights LEDs using raw assembly |
 | `led-write-manual` | Assembly | Manually writes pixel values |
 | `led-write-sequence` | Assembly | Writes a pixel sequence |
-| `loop-init-c` | C | Minimal C startup / loop |
-| `test-datasection-c` | C | Tests that initialised `.data` variables work |
+| `loop-init-c` | C | Minimal C startup and loop |
+| `test-datasection-c` | C | Tests that initialised `.data` variables are copied correctly |
 | `test-dram-minimal` | Assembly | Minimal RAM read/write test |
 | `test-spi` | C | Reads and displays gamepad input |
 
@@ -275,27 +248,26 @@ Copy an existing app directory as a starting point — you need `boot.s` and `li
 
 ## Simulation
 
-Requires [iverilog](https://github.com/steveicarus/iverilog). [GTKWave](https://gtkwave.sourceforge.net/) is optional for waveform viewing. The simulation must be run from the `src/` directory so that relative paths to `rom.mi`, `ram.mi`, and `led.mi` resolve correctly.
+Requires [iverilog](https://github.com/steveicarus/iverilog). [GTKWave](https://gtkwave.sourceforge.net/) is optional. Run from `src/` so relative paths to `rom.mi`, `ram.mi`, and `led.mi` resolve correctly.
 
 ```sh
 cd src
-make sim      # compile testbench and run simulation
-make show     # open the resulting tb.vcd in GTKWave
+make sim    # compile testbench and run
+make show   # open waveform in GTKWave
 ```
 
-The testbench in `test/tb.sv` instantiates the full top module, drives clock and reset, simulates SPI MISO responses, and checks that the SPI controller correctly delivers gamepad data to the CPU.
-
-A pre-configured GTKWave signal layout is saved in `src/cpu_states.gtkw`.
+The testbench (`test/tb.sv`) instantiates the full top module, drives clock and reset, simulates SPI MISO responses, and checks that the SPI controller correctly delivers gamepad data to the CPU. A pre-configured signal layout for GTKWave is at `src/cpu_states.gtkw`.
 
 ---
 
 ## Synthesis
 
-1. Open `Prozessor.gprj` in [Gowin EDA](https://www.gwin-semi.com/en/document/index/id/7).
-2. Place the desired app's `rom.mi` at `src/rom.mi`.
-3. Run **Synthesize** → **Place & Route** → **Program Device**.
+1. Open `Prozessor.gprj` in [Gowin EDA](https://www.gwin-semi.com/en/document/index/id/7)
+2. Copy the desired app's `rom.mi` to `src/rom.mi`
+3. Run **Synthesize** → **Place & Route** → **Program Device**
 
-Pin constraints are in `src/Prozessor.cst` and timing constraints in `src/Prozessor.sdc`.
+Pin constraints: `src/Prozessor.cst`  
+Timing constraints: `src/Prozessor.sdc`
 
 ---
 
