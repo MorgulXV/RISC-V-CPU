@@ -39,7 +39,7 @@ void test_j_imm() {
         assert(imm == tests[i].expected);
     }
 
-    printf("✅ All tests passed!\n");
+    printf("All tests passed!\n");
 }
 
 int main() {
