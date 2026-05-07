@@ -2,7 +2,7 @@
 
 A custom 32-bit RISC-V CPU (RV32I) built from scratch in SystemVerilog and synthesized on a Gowin GW5A-25A FPGA. It runs bare-metal C and assembly programs on real hardware, drives a 64×64 RGB LED matrix, and reads input from a PS2 DualShock gamepad over SPI.
 
-Built as a *Jahresarbeit* (annual thesis project) at Rudolf-Steiner-Schule Schloss Hamborn.  
+Built as a *Jahresarbeit* (annual thesis project).  
 Full written documentation (German): [`thesis/text.pdf`](thesis/text.pdf)
 
 ![Hardware photo](thesis/IMG_3295.png)
