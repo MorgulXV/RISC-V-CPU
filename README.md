@@ -231,7 +231,6 @@ To write a new app from scratch, copy an existing app directory. You need `boot.
 | App | Language | Description |
 |---|---|---|
 | `snake` | C | Snake game controlled with the DualShock d-pad |
-| `spinning_cube` | C | Bouncing coloured box on the LED matrix |
 | `swiss_flag` | C | Draws the Swiss flag |
 | `show-controller` | C | Visualises live gamepad button state on the display |
 | `display_controller` | C | Low-level HUB75E display driver demo |
