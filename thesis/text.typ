@@ -277,7 +277,7 @@ Ein zentraler Aspekt der Rechnerarchitektur ist der sogenannte Instruktionssatz.
 Viele dieser Instruktionssatzarchitekturen sind proprietär und sehr komplex.
 
 Eine öffentlich zugängliche, frei verfügbare Alternative ist die RISC-V _#gls("isa", first: true)_. RISC steht für Reduced Instruction Set Computer; das bedeutet, dass die ISA so klein wie möglich gehalten ist. Das „V“ steht für die Generation, in diesem Fall fünf.
-RISC-V ist modular aufgebaut: Ein minimaler Kern, der in dieser Arbeit umgesetzt werden soll, kann durch zahlreiche optionale Erweiterungen ergänzt werden @cui2023isa. Johnson beschreibt praktische Implementierungen und Performance-Aspekte @johnson2025arch. Für die praktische Umsetzung und das Testen von Programmen auf dem Emulator und später auf dem FPGA sind weitere Werke wie Patterson & Waterman @patterson2017reader sowie Gay @gay2022asm und Smith @smith2024assembly hilfreich. Die Integration von Speicher und Peripherie auf einem FPGA wird ausführlich in Harris et al. @harris2026soc behandelt.
+RISC-V ist modular aufgebaut: Ein minimaler Kern, der in dieser Arbeit umgesetzt werden soll, kann durch zahlreiche optionale Erweiterungen ergänzt werden @cui2023isa. Johnson beschreibt praktische Implementierungen und Performance-Aspekte @johnson2025arch. Für die praktische Umsetzung und das Testen von Programmen auf dem Emulator und später auf dem FPGA sind weitere Werke wie Patterson & Waterman @patterson2017reader sowie Gay @gay2022asm und Smith @smith2024assembly hilfreich.
 
 
 
