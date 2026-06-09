@@ -43,21 +43,21 @@ enum states
 
 unsigned char board[DISPLAY_HEIGHT][DISPLAY_WIDTH];
 
+unsigned lfsr_state;
+
 unsigned lfsr16(unsigned *reg) {
-    // Bits 16, 14, 13, 11 XORen (1-basiert -> 15, 13, 12, 10 0-basiert)
     unsigned bit = ((*reg >> 0) ^ (*reg >> 2) ^ (*reg >> 3) ^ (*reg >> 5)) & 1;
     *reg = (*reg >> 1) | (bit << 15);
     return *reg;
 }
 
 void place_food(){
-    unsigned seed = 0xACE1u;
     int food_x, food_y;
-    do 
+    do
     {
-        food_x = lfsr16(&seed) % DISPLAY_WIDTH;
-        food_y = lfsr16(&seed) % DISPLAY_HEIGHT;
-    } 
+        food_x = lfsr16(&lfsr_state) % DISPLAY_WIDTH;
+        food_y = lfsr16(&lfsr_state) % DISPLAY_HEIGHT;
+    }
     while (board[food_y][food_x] != empty);
     board[food_y][food_x] = food;
 }
@@ -82,7 +82,7 @@ void move_snake(int direction){
     }
 
     for(int i = 0; i< 64; i++){
-        for(int j = 0; j < 0; j++){
+        for(int j = 0; j < DISPLAY_WIDTH; j++){
             if(board[i][j]==tail){
                 board[i][j] = empty;
                 //add new tail
@@ -145,8 +145,8 @@ void write_board(){
     }
 }
 
-// Simple 3x5 digit font
-const unsigned char digits[10][5] = {
+// Simple 3x5 digit font — not const so it lands in .data (RAM), not .rodata (ROM)
+unsigned char digits[10][5] = {
     {0x07,0x05,0x05,0x05,0x07}, // 0
     {0x02,0x06,0x02,0x02,0x07}, // 1
     {0x07,0x01,0x07,0x04,0x07}, // 2
@@ -197,7 +197,14 @@ void delay(){
     for(volatile int i = 0; i < 100000000; i++);
 }
 
+volatile unsigned int * const spi = (volatile unsigned int *) 0x00030000;
+
 int main(){
+    // Seed LFSR from timing: spin until first button press
+    lfsr_state = 1;
+    while(!(spi[0] & 0xF000))
+        lfsr16(&lfsr_state);
+
     //init board
     for(int i = 0; i< DISPLAY_HEIGHT; i++){
         for(int j = 0; j < DISPLAY_WIDTH; j++){
@@ -211,8 +218,11 @@ int main(){
     x = DISPLAY_HEIGHT/2;
     y = DISPLAY_WIDTH/2;
     score = 0;
-    board[x][y] = head;
+    game_over = 0;
+    game_win = 0;
     direction = right;
+    direction_n = right;
+    board[x][y] = head;
 
     place_food();
 
