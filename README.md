@@ -106,11 +106,25 @@ Peripherals are memory-mapped — reads and writes to their address ranges are r
 
 **Instruction ROM** is read-only block RAM initialised from `src/rom.mi`. Loading a program means replacing this file before synthesis.
 
-**Data RAM** supports byte-enable writes — SB, SH, and SW all work correctly.
+**Data RAM** supports byte-enable writes — SB, SH, and SW all work correctly for *naturally aligned* addresses (see below).
 
 **Framebuffer** is a 64×64 array of 32-bit words, one per pixel. Only the lowest 3 bits are used: `[2]=R [1]=G [0]=B`, giving 8 colours total.
 
 **SPI / gamepad** — reading `0x0003_0000` returns the current 16-bit button state of the DualShock controller (active-high, already inverted from raw SPI).
+
+### Memory alignment
+
+The core does **not** support unaligned (misaligned) memory access, and — because it has no trap mechanism — it does **not** raise a misaligned-address exception either. Behaviour on a misaligned access is silent and non-architectural:
+
+| Access | Aligned | Misaligned behaviour |
+|---|---|---|
+| `LB` / `LBU` / `SB` | always (byte) | n/a — always valid |
+| `LH` / `LHU` | offset `0`, `2` | other offsets read as `0` |
+| `SH` | offset `0`, `2` | other offsets: **write silently dropped** |
+| `LW` | offset `0` | returns the aligned word containing the address (low bits ignored) |
+| `SW` | offset `0` | **write silently dropped** |
+
+This is not a problem in practice: the GCC build (`-march=rv32i -mabi=ilp32`, natural alignment) never emits unaligned accesses for ordinary C. It only matters for packed structs, hand-cast pointers, or byte-level `memcpy`-style code. Likewise, illegal instructions execute as a silent NOP rather than trapping.
 
 ---
 
