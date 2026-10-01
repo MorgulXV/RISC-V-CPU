@@ -1,267 +1,78 @@
-`timescale 1ns/1ns
+`timescale 1ns/1ps
+module tb_cpu;
+    reg clk = 0, rst = 1;
+    reg miso = 1;
+    wire spi_clk, cs_n, mosi;
+    integer failures = 0, checks = 0, transaction = 0, bit_number = 0;
+    integer cycles, r;
+    reg [7:0] response [0:4];
+    reg [7:0] command [0:4];
+    reg [15:0] expected_state;
+    topmodule uut(.clk(clk), .rst(rst), .miso(miso),
+        .spi_clk(spi_clk), .cs_n(cs_n), .mosi(mosi));
+    always #5 clk = ~clk;
 
-module tb_cpu();
-
-// run testbench for cpu.sv
-/*
-
-must be run in src directory:
-
-iverilog -g2012 -o tb.vvp test/tb.sv cpu.sv
-vvp tb.vvp
-
-
-*/
-
-reg clk;
-reg rst;
-reg[6:0] pc_trace;
-logic [4:0] row_addr;
-logic [5:0] col_addr;
-logic display_oe;
-logic latch;
-logic display_clk;
-logic [3:0] dout_a;
-logic [3:0] dout_b;
-logic [3:0] buttons;
-
-// SPI test signals
-reg miso;
-reg spi_test_passed = 1'b1;
-
-// Additional wires for monitoring
-wire [31:0] spi_rdata_connect;
-
-topmodule uut(
-    .clk(clk),
-    .rst(rst),
-    .trace(pc_trace),
-    .row_addr(row_addr),
-    .col_addr(col_addr),
-    .display_oe(display_oe),
-    .latch(latch),
-    .display_clk(display_clk),
-    .dout_a(dout_a),
-    .dout_b(dout_b),
-    .buttons(buttons),
-    .miso(miso)
-);
-
-// Monitor internal signals
-assign spi_rdata_connect = uut.spi_rdata_connect;
-
-initial begin
-    clk = 0;
-    forever #25 clk = ~clk;
-end
-
-integer i;
-
-initial begin
-    $dumpfile("tb.vcd");
-    $dumpvars(0, tb_cpu);
-    $display("test");
-
-    rst = 1;
-    #150;
-    rst = 0;
-
-end
-
-// SPI MISO driver - proactive version that drives immediately
-reg [7:0] miso_send_data = 8'h00;
-reg miso_active = 1'b0;
-integer miso_bit_idx = 0;
-
-// Calculate which bit to drive based on word_cntr and bit_cntr
-always @(*) begin
-    if (miso_active) begin
-        if (uut.spi_inst.word_cntr == 3) begin
-            miso_send_data = 8'h55;  // Data for word_cntr 3
-        end else if (uut.spi_inst.word_cntr == 4) begin
-            miso_send_data = 8'hAA;  // Data for word_cntr 4
-        end else begin
-            miso_send_data = 8'h00;
+    task check(input condition, input string description);
+        begin
+            checks = checks + 1;
+            if (condition !== 1'b1) begin
+                failures = failures + 1;
+                $display("FAIL: %s", description);
+            end
         end
-        
-        // Calculate bit position (MSB first)
-        case (uut.spi_inst.bit_cntr)
-            4'd0: miso = miso_send_data[7];
-            4'd1: miso = miso_send_data[6];
-            4'd2: miso = miso_send_data[5];
-            4'd3: miso = miso_send_data[4];
-            4'd4: miso = miso_send_data[3];
-            4'd5: miso = miso_send_data[2];
-            4'd6: miso = miso_send_data[1];
-            4'd7: miso = miso_send_data[0];
-            default: miso = 1'b0;
-        endcase
-    end else begin
-        miso = 1'b1;  // Idle high
-    end
-end
+    endtask
 
-// MISO driver controller - tracks transaction state
-initial begin
-    forever begin
-        // Wait for SPI transaction to start
-        wait(uut.spi_inst.cs_n == 1'b0);
-        miso_active = 1'b1;
-        $display("MISO: Transaction started at time %0t, word_cntr=%0d", 
-                 $time, uut.spi_inst.word_cntr);
-        
-        // Wait for transaction to end
-        wait(uut.spi_inst.cs_n == 1'b1);
-        miso_active = 1'b0;
-        $display("MISO: Transaction ended at time %0t", $time);
+    // Drive LSB-first responses from external SPI edges, not DUT counters.
+    always @(negedge cs_n) if (!rst) begin
+        bit_number = 0;
+        transaction = transaction + 1;
+        response[3] = transaction == 1 ? 8'ha6 : 8'h59;
+        response[4] = transaction == 1 ? 8'h3c : 8'hc3;
     end
-end
+    always @(negedge spi_clk) if (!rst && !cs_n && bit_number < 40)
+        miso = response[bit_number / 8][bit_number % 8];
+    always @(posedge spi_clk) if (!rst && !cs_n && bit_number < 40) begin
+        check(mosi === command[bit_number / 8][bit_number % 8], "SPI MOSI command bit");
+        bit_number = bit_number + 1;
+    end
 
-// SPI Controller Test - verify recv_msg values
-initial begin
-    // Initialize MISO to idle state (high)
-    miso = 1'b1;
-    
-    // Wait for reset to be deasserted
-    wait(rst == 1'b0);
-    #100;
-    
-    $display("=== SPI Controller Test ===");
-    $display("Testing SPI receive path...");
-    
-    // Wait for SPI transaction to complete (cs_n goes high AND state is IDLE)
-    wait(uut.spi_inst.cs_n == 1'b1 && uut.spi_inst.state == 3'd1);
-    #100;
-    
-    $display("SPI transaction completed at time %0t", $time);
-    $display("SPI state: %d", uut.spi_inst.state);
-    $display("recv_msg[4] = 0x%h", uut.spi_inst.recv_msg[4]);
-    $display("recv_msg[3] = 0x%h", uut.spi_inst.recv_msg[3]);
-    
-    // Check received data
-    $display("Received data check:");
-    $display("  recv_msg[4] = 8'b%b", uut.spi_inst.recv_msg[4]);
-    $display("  recv_msg[3] = 8'b%b", uut.spi_inst.recv_msg[3]);
-    $display("  spi_rdata = 32'h%h", uut.spi_inst.spi_rdata);
-    
-    // Verify recv_msg[3] received 0x55 during word_cntr=3
-    if (uut.spi_inst.recv_msg[3] !== 8'h55) begin
-        $display("ERROR: recv_msg[3] = 8'h%h, expected 8'h55", uut.spi_inst.recv_msg[3]);
-        spi_test_passed = 1'b0;
-    end else begin
-        $display("PASS: recv_msg[3] = 0x55");
+    initial begin
+        response[0] = 8'hff; response[1] = 8'h41; response[2] = 8'h5a;
+        command[0] = 8'h01; command[1] = 8'h42;
+        command[2] = 0; command[3] = 0; command[4] = 0;
+        repeat (2) @(negedge clk);
+        check(uut.pc === 0 && uut.controller_state === 0 && cs_n === 1, "CPU and SPI reset");
+        for (r = 0; r < 32; r = r + 1)
+            check(uut.machine.regfile[r] === 0, "register reset");
+        rst = 0;
+        repeat (2) begin
+            @(negedge cs_n);
+            @(posedge cs_n);
+            @(negedge clk);
+            expected_state = ~{response[3], response[4]};
+            check(bit_number == 40, "SPI transfers five complete bytes");
+            check(uut.controller_state === expected_state, "SPI byte order and active-low inversion");
+            cycles = 0;
+            while (uut.machine.regfile[5] !== {16'b0, expected_state} && cycles < 30) begin
+                @(negedge clk); cycles = cycles + 1;
+            end
+            check(uut.machine.regfile[5] === {16'b0, expected_state}, "CPU LW reads current SPI state");
+            check({uut.button_left, uut.button_down, uut.button_right, uut.button_up} ===
+                  {~expected_state[15], ~expected_state[11], ~expected_state[14], ~expected_state[10]},
+                  "button output mapping");
+        end
+        // Reset during an active transaction and CPU execution.
+        @(negedge cs_n);
+        repeat (10) @(negedge clk);
+        rst = 1;
+        repeat (2) @(negedge clk);
+        check(cs_n === 1 && uut.controller_state === 0 && uut.pc === 0, "mid-transaction reset");
+        check(uut.dmem_we === 0 && uut.fbuf_we === 0, "reset prevents memory writes");
+        for (r = 0; r < 32; r = r + 1)
+            check(uut.machine.regfile[r] === 0, "register reset after execution");
+        if (failures) $fatal(1, "%0d/%0d system checks failed", failures, checks);
+        $display("PASS: %0d system checks; SPI command/response, CPU MMIO, buttons and reset", checks);
+        $finish;
     end
-    
-    // Verify recv_msg[4] received 0xAA during word_cntr=4
-    if (uut.spi_inst.recv_msg[4] !== 8'hAA) begin
-        $display("ERROR: recv_msg[4] = 8'h%h, expected 8'hAA", uut.spi_inst.recv_msg[4]);
-        spi_test_passed = 1'b0;
-    end else begin
-        $display("PASS: recv_msg[4] = 0xAA");
-    end
-    
-    // Check spi_rdata contains the correct bits
-    // spi_rdata = {16'b0, recv_msg[4], recv_msg[3]} = {16'b0, 0xAA, 0x55}
-    if (uut.spi_inst.spi_rdata !== 32'h0000AA55) begin
-        $display("ERROR: spi_rdata = 32'h%h, expected 32'h0000AA55", uut.spi_inst.spi_rdata);
-        spi_test_passed = 1'b0;
-    end else begin
-        $display("PASS: spi_rdata = 0x0000AA55");
-    end
-    
-    if (spi_test_passed) begin
-        $display("=== SPI TEST PASSED ===");
-    end else begin
-        $display("=== SPI TEST FAILED ===");
-    end
-    
-end
-
-// CPU lw SPI Test - verify data ends up in a CPU register
-initial begin
-    reg [31:0] expected_data;
-    reg [31:0] x5_value;
-    integer timeout;
-    
-    $display("\n=== CPU lw SPI Register Test ===");
-    
-    // Expected SPI data: {16'b0, recv_msg[4], recv_msg[3]] = {16'b0, 0xAA, 0x55}
-    expected_data = 32'h0000AA55;
-    
-    // Wait for SPI Controller Test to complete first
-    wait(spi_test_passed !== 1'bx);
-    #500;
-    
-    $display("SPI Controller Test complete, checking CPU register...");
-    $display("Time: %0t ns", $time);
-    
-    $display("Expected SPI data: 0x%h", expected_data);
-    $display("SPI controller spi_rdata: 0x%h", uut.spi_inst.spi_rdata);
-    $display("spi_rdata_connect: 0x%h", spi_rdata_connect);
-    
-    // Force bus to read from SPI to verify path
-    force uut.spi_re = 1'b1;
-    force uut.bus_addr = 32'h00030000;
-    #50;
-    
-    $display("bus_rdata (forced SPI read): 0x%h", uut.machine.bus_rdata);
-    
-    if (uut.machine.bus_rdata == expected_data) begin
-        $display("PASS: Bus path correctly returns SPI data");
-    end else begin
-        $display("ERROR: Bus path returned 0x%h, expected 0x%h", uut.machine.bus_rdata, expected_data);
-    end
-    
-    release uut.spi_re;
-    release uut.bus_addr;
-    
-    // Now check if CPU's own lw instruction loads the data correctly
-    $display("\n=== CPU lw Instruction Test ===");
-    
-    // Wait for CPU to execute lw from SPI address
-    timeout = 0;
-    while (uut.machine.regfile[5] == 32'b0 && timeout < 500000) begin
-        #100;
-        timeout = timeout + 100;
-    end
-    
-    #1000;  // Wait for register to update
-    
-    x5_value = uut.machine.regfile[5];
-    
-    $display("After waiting for CPU lw instruction:");
-    $display("Time: %0t ns", $time);
-    $display("regfile[5] (x5): 0x%h", x5_value);
-    
-    // Check if x5 got the SPI data
-    if (x5_value !== expected_data) begin
-        $display("ERROR: regfile[5] = 0x%h, expected 0x%h", x5_value, expected_data);
-        $display("FAIL: SPI data did NOT end up in CPU register x5!");
-    end else begin
-        $display("PASS: SPI data correctly loaded into regfile[5] via lw instruction");
-    end
-    
-    $display("=== CPU SPI Register Test Complete ===\n");
-end
-
-function string state_name(logic [3:0] state);
-    case(state)
-        4'd0: return "FETCH";
-        4'd1: return "SHIFT1";
-        4'd2: return "SHIFT2";
-        4'd3: return "LATCH_HIGH";
-        4'd4: return "LATCH_LOW";
-        4'd5: return "WAIT";
-        default: return "UNKNOWN";
-    endcase
-endfunction
-
-initial begin
-    #2000000;
-    $display("ERROR: Test timeout!");
-    $finish;
-end
-
+    initial begin #2000000; $fatal(1, "System test timeout"); end
 endmodule
-
-//iverilog -g2012 -o build/tb.vvp test/tb.sv src/cpu.sv

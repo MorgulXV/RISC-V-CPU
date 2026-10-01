@@ -38,6 +38,8 @@ wire [31:0] instr_connect;
 wire [15:0] controller_state;
 wire spi_re;
 wire imem_ce;
+wire rom_re;
+wire [31:0] bus_rdata;
 wire dmem_ce;
 wire fbuf_re;
 wire fbuf_we;
@@ -50,6 +52,9 @@ wire [31:0] bus_wdata;
 wire [31:0] instr_addr;
 wire [31:0] instr;
 reg spi_ce;
+
+// Fetch and data loads use the same ROM port in different CPU stages.
+assign bus_rdata = rom_re ? instr : dmem_rdata;
 
 assign button_left = ~controller_state[15];
 assign button_down = ~controller_state[11];
@@ -73,7 +78,7 @@ rom_module imem (
 		.rst(rst),
 		.ce(imem_ce),
 		.oce(1'b1),
-		.addr(instr_addr),
+		.addr(rom_re ? bus_addr : instr_addr),
 		.dout(instr)
 );
 
@@ -83,13 +88,14 @@ fsm machine(
 
 		// instruction memory
 		.imem_ce(imem_ce),
+		.rom_re(rom_re),
 		.instr_addr(instr_addr),
 		.instr(instr),
 		.pc(pc),
 
 		//data memory
 		.bus_addr(bus_addr),
-		.bus_rdata(dmem_rdata),
+		.bus_rdata(bus_rdata),
 		.dmem_ce(dmem_ce),
 		.dmem_read(dmem_read),
 		.dmem_we(dmem_we),
@@ -282,7 +288,7 @@ always @(posedge clk or posedge rst) begin
 		PREPARE: begin
 			spi_clk <= 0;
 			cs_n <= 0;
-			mosi <= send_msg[word_cntr][bit_cntr];
+			mosi <= send_msg[word_cntr[2:0]][bit_cntr];
 			if (wait_cntr < wait_cntr_max) begin
 				wait_cntr <= wait_cntr + 1'b1;
 			end else begin
@@ -296,7 +302,7 @@ always @(posedge clk or posedge rst) begin
 			// Sample MISO early in the HIGH phase (shortly after rising edge)
 			// For CPHA=1, data is valid after the rising edge
 			if (wait_cntr == 1) begin
-				recv_msg[word_cntr][bit_cntr] <= miso;
+				recv_msg[word_cntr[2:0]][bit_cntr] <= miso;
 			end
 			if(wait_cntr < wait_cntr_max) begin
 				wait_cntr <= wait_cntr + 1'b1;
@@ -339,7 +345,7 @@ end
 endmodule
 
 // Single-port synchronous block RAM with byte-enables for writes
-// read has one cycle latency, compare with SUG949E p.67
+// A read request captures data in one clock, ready for CPU MEMORY2.
 module ram_module (
 	input  logic        clk,
 	input  logic        re,
@@ -352,7 +358,6 @@ module ram_module (
 );
 
 reg [31:0] ram_mem [4095:0];
-reg [31:0] dout_reg;
 
 // note we cannot just shift the address by >> 2 as before, because the RAM has only 4096 entries
 // if we shift >>2 the higher address bits from the address map (0x0001 <=) move into the index space
@@ -373,28 +378,13 @@ always @(posedge clk) begin
 	end
 end
 
+// Hold the last result when no read is requested. A second output register
+// would require another enabled cycle and make the CPU consume stale data.
 always @(posedge clk) begin
-	if(rst) begin
-		dout_reg <= 32'b0;
-	end
-	else begin
-		if (re && ce) begin
-			dout_reg <= ram_mem[index];
-		end
-	end
-end
-
-always @(posedge clk) begin
-	if(rst) begin
+	if (rst)
 		data_out <= 32'b0;
-	end
-	else begin
-		// TODO: check whether we want to gate this update with RE or RE&CE signal here. Compare with SUG949E p.67
-		// currently we update data_out on every clock when not in reset.
-		if(re && ce) begin
-			data_out <= dout_reg;
-		end
-	end
+	else if (re && ce)
+		data_out <= ram_mem[index];
 end
 
 
@@ -570,7 +560,7 @@ always @(posedge clk or posedge rst) begin
 			SHIFT2: begin           
 				display_clk <= 1'b0;
 				fbuf_re <= 1'b0;
-				if(col_addr == COLUMNS - 1) begin
+				if(int'(col_addr) == COLUMNS - 1) begin
 					con_state <= LATCH;
 					latch_cntr <= LATCH_CYCLES;
 					display_oe <= 1'b1;
@@ -628,7 +618,7 @@ always @(posedge clk or posedge rst) begin
 					display_oe <= 1'b1;
 					con_state <= FETCH;
 
-					if(row_addr == ROWS - 1) begin
+					if(int'(row_addr) == ROWS - 1) begin
 						row_addr <= '0;
 					end else begin
 						row_addr <= row_addr + 1'b1;
@@ -636,6 +626,8 @@ always @(posedge clk or posedge rst) begin
 				
 				end
 			end
+
+			default: begin end // Unused state encodings retain outputs.
 
 		endcase
 	end
@@ -647,6 +639,7 @@ module fsm (
 	input  logic        rst,
 
 	output logic        imem_ce,
+	output logic        rom_re,
 	output logic [31:0] instr_addr,
 	input  logic [31:0] instr,
 	output logic [31:0] pc,
@@ -683,7 +676,6 @@ module fsm (
 	reg [6:0] funct7;
 
 	reg [31:0] tmp_rd;
-	reg [4:0] shift_amt;
 	reg [31:0] tmp_bus_wdata;
 
 	reg set_rd_flag;
@@ -742,6 +734,7 @@ module fsm (
 			spi_ce <= 0;
 			spi_re <= 0;
 			imem_ce <= 1;
+			rom_re <= 0;
 			bus_addr <= 0;
 			pc_next <= 0;
 			for (i = 0; i < 32; i = i + 1)
@@ -755,6 +748,7 @@ module fsm (
 			spi_ce <= 0;
 			spi_re <= 0;
 			imem_ce <= 1;
+			rom_re <= 0;
 
 			case (state)
 				FETCH: begin
@@ -797,7 +791,6 @@ module fsm (
 					case (opcode)
 						7'b0110011: begin        //R type
 							set_rd_flag <= 1;
-							shift_amt <= regfile[rs2][4:0];
 							case (funct3)
 								3'b000: begin
 									case (funct7)
@@ -816,13 +809,13 @@ module fsm (
 								3'b111:
 									tmp_rd <= regfile[rs1] & regfile[rs2];   //and
 								3'b001:
-									tmp_rd <= regfile[rs1] << shift_amt;  //sll
+									tmp_rd <= regfile[rs1] << regfile[rs2][4:0];  // SLL: use the current rs2, masked to five bits.
 								3'b101: begin
 									case (funct7)
 										7'b0000000:
-											tmp_rd <= regfile[rs1] >> shift_amt;  //srl
+											tmp_rd <= regfile[rs1] >> regfile[rs2][4:0];  // SRL: logical right shift.
 										7'b0100000:
-											tmp_rd <= $signed(regfile[rs1]) >>> shift_amt;  //sra
+											tmp_rd <= $signed(regfile[rs1]) >>> regfile[rs2][4:0];  // SRA: signed operand preserves the sign bit.
 										default:
 											tmp_rd <= 32'b0;
 									endcase
@@ -871,12 +864,14 @@ module fsm (
 						7'b0000011: begin	// Load
 							set_rd_flag <= 0;
 							bus_addr <= regfile[rs1] + imm;
+							if ((regfile[rs1] + imm) < 32'h00004000)
+								rom_re <= 1;
 							//if(bus_addr[31:15] == 16'h0001) begin
-							if(((regfile[rs1] + imm) >> 16) == 16'h0001) begin
+							if(((regfile[rs1] + imm) >> 16) == 32'h00000001) begin
 								dmem_ce <= 1;
 								dmem_read <= 1;
 							end
-							if(((regfile[rs1] + imm) >> 16) == 16'h0003)begin
+							if(((regfile[rs1] + imm) >> 16) == 32'h00000003)begin
 								spi_ce <= 1'b1;
 								spi_re <= 1'b1;
 								$display("EX: prepare read from SPI at addr 0x%h", regfile[rs1] + imm);
@@ -888,11 +883,11 @@ module fsm (
 							tmp_bus_wdata <= regfile[rs2];
 							// store to data memory
 							//if(bus_addr[31:15] == 16'h0001) begin
-							if(((regfile[rs1] + imm) >> 16) == 16'h0001) begin
+							if(((regfile[rs1] + imm) >> 16) == 32'h00000001) begin
 								dmem_ce <= 1;
 							end
 							// store to framebuffer
-							if(((regfile[rs1] + imm) >> 16) == 16'h0002) begin
+							if(((regfile[rs1] + imm) >> 16) == 32'h00000002) begin
 							//if(bus_addr[31:15] == 16'h0002)begin
 								fbuf_we <= 1'b1;
 							end
@@ -946,18 +941,8 @@ module fsm (
 					state <= MEMORY2;
 					case (opcode)
 					7'b0000011: begin  // Load
-						// keep values for dmem_ce and dmem_read from EXECUTE stage, only active if read from data memory (not framebuffer)
-						// TODO: Check where we need to keep signals active for whole MEM stage
-						//dmem_ce <= 1;
-						//dmem_read <= 1;
-
-						`ifndef SYNTHESIS
-
-						if(spi_ce && spi_re) begin
-							$display("MEM1: prepare read from SPI at addr 0x%h", bus_addr);
-						end
-
-						`endif
+						// Keep ROM data selected until MEMORY2 captures the load.
+						rom_re <= (bus_addr < 32'h00004000);
 					end
 					7'b0100011: begin	// Store
 						// if address in framebuffer range
@@ -966,7 +951,7 @@ module fsm (
 							fbuf_we <= 1'b1;
 							bus_wdata <= tmp_bus_wdata;
 							$display("Store to framebuffer at addr %h data %h", bus_addr, tmp_bus_wdata);
-						end else begin
+						end else if (bus_addr[31:16] == 16'h0001) begin
 						dmem_ce <= 1;
 						dmem_read <= 0;
 						case (funct3)
@@ -978,7 +963,7 @@ module fsm (
 									end
 									2'b01: begin
 										dmem_we <= 4'b0010;
-										bus_wdata <= {6'b0, tmp_bus_wdata[7:0], 8'b0};
+										bus_wdata <= {16'b0, tmp_bus_wdata[7:0], 8'b0};
 									end
 									2'b10: begin
 										dmem_we <= 4'b0100;
@@ -1091,6 +1076,7 @@ module fsm (
 						endcase
 						end
 					end
+						default: begin end // Only loads produce a result in this stage.
 					endcase
 				end
 				WRITEBACK: begin

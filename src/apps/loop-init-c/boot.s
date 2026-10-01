@@ -15,26 +15,26 @@ _start:
     la      gp, __global_pointer$
     .option pop
 
-    /* Copy .data from ROM image to RAM */
+    /* Copy bytes so .data may have any size or alignment. */
     la      a0, __data_load      /* src (ROM) */
     la      a1, __data_start     /* dst (RAM) */
     la      a2, __data_end       /* end */
 1:
-    beq     a1, a2, 2f
-    lw      t0, 0(a0)
-    sw      t0, 0(a1)
-    addi    a0, a0, 4
-    addi    a1, a1, 4
+    bgeu    a1, a2, 2f
+    lbu     t0, 0(a0)
+    sb      t0, 0(a1)
+    addi    a0, a0, 1
+    addi    a1, a1, 1
     j       1b
 2:
 
-    /* Zero .bss */
+    /* Clear exactly the bytes in .bss, including a partial final word. */
     la      a1, __bss_start
     la      a2, __bss_end
 3:
-    beq     a1, a2, 4f
-    sw      zero, 0(a1)
-    addi    a1, a1, 4
+    bgeu    a1, a2, 4f
+    sb      zero, 0(a1)
+    addi    a1, a1, 1
     j       3b
 4:
 
